@@ -95,8 +95,13 @@ int main(int argc, const char **argv)
     mjr_makeContext(m, &con, mjFONTSCALE_150);
 
     // Optional: Set initial camera position for a good view (e.g., side view)
-    cam.azimuth = 0;     // Horizontal rotation
-    cam.elevation = -45; // Vertical rotation
+    double lookat_point[3] = {0, 0, 0};
+    cam.lookat[0] = lookat_point[0];
+    cam.lookat[1] = lookat_point[1];
+    cam.lookat[2] = lookat_point[2];
+
+    cam.azimuth = 225;   // Horizontal rotation
+    cam.elevation = -30; // Vertical rotation
     cam.distance = 4;    // Distance from the target
 
     glfwMakeContextCurrent(window);

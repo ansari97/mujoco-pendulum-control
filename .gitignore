@@ -1,0 +1,6 @@
+# Ignore the build directory
+build/
+
+# Ignore compiled executables (if they end up in the root)
+*.out
+ur5e_sim_tutorial
