@@ -156,23 +156,23 @@
                   <site
                     name="attachment_site" pos="0 0.1 0" quat="-1 1 0 0" />
                   <!-- adding body for the pendulum -->
-                  <!-- <body name="pendulum"
-                    pos="0 0.1 0" quat="0.7071 -0.7071 0 0"> -->
-                  <!-- body frame rotated about wrist -x axis by 90deg-->
+                  <body name="pendulum"
+                    pos="0 0.1 0" quat="0.7071 -0.7071 0 0"> 
+                  <!-- body frame rotated about wrist -x axis by 90deg
                   <!-- <inertial mass="0.500" pos="0 0 0.25"
                       diaginertia="0.010419 0.010419 0.000025" /> -->
-                  <!-- <geom
+                  <geom
                       type="cylinder"
                       size="0.01 0.25"
                       mass="0.500"
                       pos="0 0 0.25" rgba="1 1 0 1" />
-                    <site name="pend_com_site" pos="0 0 0.25" /> -->
+                    <site name="pend_com_site" pos="0 0 0.25" />
                   <!--  cylinder length in the size attribute is the half-length-->
                   <!-- <joint
                       name="pendulum_joint" type="hinge" axis=" 1 0 0"
                       damping="
                     0"></joint> -->
-                  <!-- </body> -->
+                  </body>
                 </body>
               </body>
             </body>
