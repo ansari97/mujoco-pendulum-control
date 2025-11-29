@@ -122,6 +122,7 @@ def quat_inverse(quat):
 
 def main():
     global model, scene, cam, opt
+
     # Load Model
     if not os.path.exists(XML_PATH):
         print(f"Error: XML file not found at {XML_PATH}")
