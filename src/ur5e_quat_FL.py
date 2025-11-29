@@ -1,11 +1,104 @@
 import mujoco
 import mujoco.viewer
+import glfw
 import numpy as np
 from scipy.spatial.transform import Rotation
 import time
 import os
 
 from pathlib import PureWindowsPath
+
+# --- Global Variables ---
+button_left = False
+button_middle = False
+button_right = False
+lastx = 0
+lasty = 0
+
+# Declare MuJoCo objects globally for callbacks
+model = None
+scene = None
+cam = None
+opt = None
+
+
+def init_window():
+    if not glfw.init():
+        return None
+    window = glfw.create_window(1200, 900, "UR5e Orientation Control", None, None)
+    if not window:
+        glfw.terminate()
+        return None
+    glfw.make_context_current(window)
+
+    # Disable V-Sync so we can manage timing manually in the loop
+    glfw.swap_interval(0)
+
+    return window
+
+
+# --- Callbacks ---
+def keyboard(window, key, scancode, act, mods):
+    global opt
+    if act == glfw.PRESS and opt is not None:
+        if key == glfw.KEY_F:  # Toggle Frames
+            # Cycle: None -> Body -> Geom -> Site -> None
+            if opt.frame == mujoco.mjtFrame.mjFRAME_NONE:
+                opt.frame = mujoco.mjtFrame.mjFRAME_BODY
+            elif opt.frame == mujoco.mjtFrame.mjFRAME_BODY:
+                opt.frame = mujoco.mjtFrame.mjFRAME_GEOM
+            elif opt.frame == mujoco.mjtFrame.mjFRAME_GEOM:
+                opt.frame = mujoco.mjtFrame.mjFRAME_SITE
+            else:
+                opt.frame = mujoco.mjtFrame.mjFRAME_NONE
+
+        elif key == glfw.KEY_C:  # Toggle Contact Points
+            flags = mujoco.mjtVisFlag.mjVIS_CONTACTPOINT
+            opt.flags[flags] = not opt.flags[flags]
+
+        elif key == glfw.KEY_T:  # Toggle Transparency
+            flags = mujoco.mjtVisFlag.mjVIS_TRANSPARENT
+            opt.flags[flags] = not opt.flags[flags]
+
+
+def mouse_button(window, button, act, mods):
+    global button_left, button_middle, button_right, lastx, lasty
+    button_left = glfw.get_mouse_button(window, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS
+    button_middle = (
+        glfw.get_mouse_button(window, glfw.MOUSE_BUTTON_MIDDLE) == glfw.PRESS
+    )
+    button_right = glfw.get_mouse_button(window, glfw.MOUSE_BUTTON_RIGHT) == glfw.PRESS
+    lastx, lasty = glfw.get_cursor_pos(window)
+
+
+def mouse_move(window, xpos, ypos):
+    global lastx, lasty
+    dx = xpos - lastx
+    dy = ypos - lasty
+    lastx = xpos
+    lasty = ypos
+
+    if not (button_left or button_middle or button_right):
+        return
+
+    action = mujoco.mjtMouse.mjMOUSE_ZOOM
+    if button_left:
+        if glfw.get_key(window, glfw.KEY_LEFT_SHIFT) == glfw.PRESS:
+            action = mujoco.mjtMouse.mjMOUSE_MOVE_H
+        else:
+            action = mujoco.mjtMouse.mjMOUSE_ROTATE_V
+    elif button_right:
+        action = mujoco.mjtMouse.mjMOUSE_MOVE_V
+
+    width, height = glfw.get_window_size(window)
+    mujoco.mjv_moveCamera(model, action, dx / height, dy / height, scene, cam)
+
+
+def scroll(window, xoffset, yoffset):
+    mujoco.mjv_moveCamera(
+        model, mujoco.mjtMouse.mjMOUSE_ZOOM, 0, -0.05 * yoffset, scene, cam
+    )
+
 
 # --- Configuration ---
 file_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,7 +121,7 @@ def quat_inverse(quat):
 
 
 def main():
-
+    global model, scene, cam, opt
     # Load Model
     if not os.path.exists(XML_PATH):
         print(f"Error: XML file not found at {XML_PATH}")
@@ -45,11 +138,36 @@ def main():
     # Reset and Initialize
     mujoco.mj_resetData(model, data)
 
-    SIM_DURATION = 20.0
+    window = init_window()
+    if not window:
+        return
+
+    # Init Visualization
+    cam = mujoco.MjvCamera()
+    opt = mujoco.MjvOption()
+    opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = True
+    opt.frame = mujoco.mjtFrame.mjFRAME_BODY
+
+    scene = mujoco.MjvScene(model, maxgeom=10000)
+    context = mujoco.MjrContext(model, mujoco.mjtFontScale.mjFONTSCALE_150)
+
+    glfw.set_cursor_pos_callback(window, mouse_move)
+    glfw.set_mouse_button_callback(window, mouse_button)
+    glfw.set_scroll_callback(window, scroll)
+    glfw.set_key_callback(window, keyboard)  # Register keyboard callback
+
+    cam.azimuth = 90
+    cam.elevation = -45
+    cam.distance = 2.0
+    cam.lookat = np.array([0.0, 0.0, 0.5])
+
+    SIM_DURATION = 10.0
     TIMESTEP = model.opt.timestep
+    RENDER_FREQ = 60.0
 
     # --- INITIALIZATION ---
     q_init = np.array([0, -1.63, 1.51, 1.6, -0.314, -1])
+    q_init = np.pi * 2 * np.random.rand(q_init.shape[0]) - np.pi
     # Make sure we don't start right on a singularity
     q_init = q_init + 0.1 * np.random.rand(q_init.shape[0])
     print("q_init: ", q_init)
@@ -80,7 +198,7 @@ def main():
 
     # Define tasks space output here
     # R_des = np.eye(3)
-    theta = np.deg2rad(45)
+    theta = np.deg2rad(120)
     R_des = np.array(
         [
             [1, 0, 0],
@@ -138,13 +256,16 @@ def main():
     # save_grav = model.opt.gravity
     model.opt.gravity[:] = 0
     print(model.opt.gravity)
+    step_count = 0
 
-    with mujoco.viewer.launch_passive(model, data) as viewer:
-        start_time = time.time()
-        step_count = 0
+    last_render_time = 0
+    sim_start_time = time.time()
 
-        while viewer.is_running() and data.time < SIM_DURATION:
-            step_start = time.time()
+    while not glfw.window_should_close(window) and data.time < SIM_DURATION:
+
+        wall_time = time.time() - sim_start_time
+        while data.time < wall_time:
+            # step_start = time.time()
             mujoco.mj_forward(model, data)
 
             # --- Read State ---
@@ -241,7 +362,6 @@ def main():
                 # print("dJ_task: ", dJ_task)
 
             mujoco.mj_step(model, data)
-            viewer.sync()
 
             step_count += 1
             # # if step_count % 100 == 0:
@@ -252,6 +372,61 @@ def main():
             # time_until_next_step = model.opt.timestep - (time.time() - step_start)
             # if time_until_next_step > 0:
             #     time.sleep(time_until_next_step)
+
+        # 3. Rendering (at RENDER_FREQ 60Hz)
+        if time.time() - last_render_time >= 1 / RENDER_FREQ:
+            viewport = mujoco.MjrRect(0, 0, 0, 0)
+            viewport.width, viewport.height = glfw.get_framebuffer_size(window)
+
+            mujoco.mjv_updateScene(
+                model, data, opt, None, cam, mujoco.mjtCatBit.mjCAT_ALL.value, scene
+            )
+            mujoco.mjr_render(viewport, scene, context)
+
+            overlay_text = f"Wall Time: {data.time:.2f} s"
+            mujoco.mjr_overlay(
+                mujoco.mjtFontScale.mjFONTSCALE_150,
+                mujoco.mjtGridPos.mjGRID_TOPLEFT,
+                viewport,
+                overlay_text,
+                None,
+                context,
+            )
+
+            glfw.swap_buffers(window)
+            glfw.poll_events()
+            last_render_time = time.time()
+
+        # 4. CPU Yield
+        # If physics is ahead of wall clock, sleep slightly to save CPU
+        # But ensure we don't sleep too long and lag
+        if data.time > wall_time:
+            time.sleep(0.001)
+
+    if data.time > SIM_DURATION:
+        print("Simulation complete!")
+
+        mujoco.mjv_updateScene(
+            model, data, opt, None, cam, mujoco.mjtCatBit.mjCAT_ALL.value, scene
+        )
+        mujoco.mjr_render(viewport, scene, context)
+
+        overlay_text = "Simulation complete!"
+        mujoco.mjr_overlay(
+            mujoco.mjtFontScale.mjFONTSCALE_150,
+            mujoco.mjtGridPos.mjGRID_TOPLEFT,
+            viewport,
+            overlay_text,
+            None,
+            context,
+        )
+        glfw.swap_buffers(window)
+        glfw.poll_events()
+
+    if not glfw.window_should_close(window):
+        input("Press enter in the terminal to close rendering window...")
+    glfw.terminate()
+    print("Closed window!")
 
 
 if __name__ == "__main__":
