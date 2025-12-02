@@ -162,7 +162,7 @@ def main():
     cam.distance = 2.0
     cam.lookat = np.array([0.0, 0.0, 0.5])
 
-    SIM_DURATION = 20.0
+    SIM_DURATION = 30.0
     TIMESTEP = model.opt.timestep
     RENDER_FREQ = 60.0
 
@@ -331,7 +331,7 @@ def main():
             tau_pos = -kp_posture * (q[:6] - q_des) - kd_posture * dq[:6]
 
             # Total Torque
-            tau_total = tau_task + (N @ tau_pos)
+            tau_total = tau_task  # + (N @ tau_pos)
             # tau_total = J_task.T @ ddy
 
             # # --- Apply ---
