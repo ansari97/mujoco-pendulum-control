@@ -102,7 +102,8 @@ def scroll(window, xoffset, yoffset):
 
 # --- Configuration ---
 file_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-XML_PATH = file_path + "/assets/ur5e.xml"
+# XML_PATH = file_path + "/assets/ur5e/ur5e_rigid_pend.xml"
+XML_PATH = file_path + "/assets/ur5e/ur5e.xml"
 
 
 def skew2Vec(R):
