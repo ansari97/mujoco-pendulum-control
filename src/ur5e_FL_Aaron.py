@@ -5,8 +5,6 @@ import mujoco.viewer
 
 import os
 
-from qpsolvers import solve_qp
-
 
 def quat_inverse(quat):
     quat_inverse = quat.copy()
@@ -23,12 +21,13 @@ def getEulerFromQuat(quat):
 
 # Load the UR5e model
 file_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-XML_PATH = file_path + "/assets/ur5e/ur5e_sphere.xml"
+XML_PATH = file_path + "/assets/ur5e/ur5e_pend_bob.xml"
+
 model = mujoco.MjModel.from_xml_path(XML_PATH)
 data = mujoco.MjData(model)
 
 # Parameters
-y_size = 6  # output dimension (end-effector position in 3D)
+y_size = 6  # output dimension (pendulum orientation and end-effector position in 3D)
 ee_body_ID = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "wrist_3_link")
 pend_body_ID = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pendulum")
 # Trajectory parameters
@@ -40,7 +39,7 @@ dt = 0.001  # time step
 
 # --- Controller Parameters ---
 # Gains (Tuned for stability)
-lam = -1  # eigenvalues for Kp and Kd calculations; no imaginary part
+lam = -5  # eigenvalues for Kp and Kd calculations; no imaginary part
 kp_val = lam * lam
 kd_val = -(lam + lam)
 o_g = 50  # desired orientation gain
@@ -51,20 +50,30 @@ Kd = np.diag([kd_val, kd_val, kd_val, o_g * kd_val, o_g * kd_val, o_g * kd_val])
 # For mapping 6 torques to the 7 joints
 B = np.zeros((model.nv, model.nu))
 B[: model.nu, :] = np.eye(model.nu)
+print("B")
 print(B)
-# input()
 
 # Pre-allocation
 M = np.zeros((model.nv, model.nv))  # mass-matrix
-J_task = np.zeros((y_size, model.nv))  # for the first step
+
+J_task = np.zeros((y_size, model.nv))  # task jacobian
 J_task_prev = np.zeros((y_size, model.nv))  # for the first step
+
 R = np.zeros(3)  # rotation matrix
+
 jacp = np.zeros((3, model.nv))
 jacr = np.zeros((3, model.nv))
+
+jacr_rot = np.zeros((3, model.nv))
+jacp_pos = np.zeros((3, model.nv))
+
+# output error and derivatives
 y = np.zeros(y_size)
+dy = np.zeros_like(y)
 ddy = np.zeros_like(y)
 
 # Quaternion utilities
+# Just a static value for now
 theta = np.deg2rad(0)
 R_des = np.array(
     [
@@ -79,50 +88,58 @@ quat_des = quat_des.as_quat(scalar_first=True)
 quat_curr = np.zeros_like(quat_des)
 quat_err = np.zeros_like(quat_des)
 
-model.opt.disableflags |= mujoco.mjtDisableBit.mjDSBL_CONTACT  # disable collisions
-
-# QP weights
-w_balance = 10  # Priority 1: Balance Pendulum
-w_pos = 10.0  # Priority 2: Keep Wrist near Home
-w_reg = 0.0001  # Regularize Torques (Minimize Effort)
-w_posture = 0.1  # Regularize Accelerations (Stop twitching)
-
-# joint limits (+-/both sides)
-qpos_lim = 2 * np.pi * np.ones(model.nv)  # including the pendulum
-qpos_lim[2] = np.pi  # smaller limit for the elbow
-qpos_lim[6] = np.inf  # smaller limit for the pendulum
-
-qvel_lim = np.pi * np.ones(model.nv)  # pi/s
-
-beta = 1000  # decelerating torque rad/s2^s
-
-# soft wall limit gains
-# kp_lim = 100
-# kv_lim = 2 * np.sqrt(kp_lim)
-
-TIMESTEP = model.opt.timestep
-
-step_count = 0
+# disable collisions
+model.opt.disableflags |= mujoco.mjtDisableBit.mjDSBL_CONTACT
 
 with mujoco.viewer.launch_passive(model, data) as viewer:
     # Set initial joint positions (home position)
-    data.qpos = [-np.pi, -np.pi / 2, 0, np.pi / 2, -np.pi / 2 + 0.05, 0, 0]
+    data.qpos = [-np.pi, -np.pi / 2, 0, -np.pi, -np.pi / 2, 0, 0.55]
     data.qvel = np.zeros(model.nv)
     # data.mocap_pos[0] = [1.0, 0.0, 1.0]  # Initial position of the mocap sphere
 
-    print(data.xpos[pend_body_ID])
-    print(data.xpos[ee_body_ID])
+    # print(data.xpos[pend_body_ID])
+    # print(data.xpos[ee_body_ID])
 
+    print("model gravity")
     print(model.opt.gravity)
+    print("model.nv")
+    print(model.nv)
+    print("model.nq")
+    print(model.nq)
+
+    print("model.nu")
+    print(model.nu)
+
+    step_count = 0
+
+    # --- SET CAMERA ANGLE ONCE ---
+    viewer.cam.azimuth = 90  # Azimuth angle (degrees)
+    viewer.cam.elevation = -45  # Elevation angle (degrees)
+    viewer.cam.distance = 5.0  # Distance from the lookat point (meters)
+    viewer.cam.lookat[:] = [0, 0, 0.5]  # Point the camera is looking at [x, y, z]
+
+    # Apply the changes
+    viewer.sync()
+
+    # 1. Check Total Mass
+    print(f"Total Mass: {model.body_mass[pend_body_ID]}")
+    # Expected: 0.3
+
+    # 2. Check CoM Position (offset from the Body Frame origin)
+    print(f"CoM Offset: {model.body_ipos[pend_body_ID]}")
+    # Expected: [0. 0. 0.375]
+
+    # 3. Check Inertia
+    print(f"Inertia: {model.body_inertia[pend_body_ID]}")
 
     # Simulation loop
     while viewer.is_running():
-        # Step the simulation
-        mujoco.mj_step(model, data)
+
+        mujoco.mj_forward(model, data)
+        mujoco.mj_rnePostConstraint(model, data)
 
         q = data.qpos[: model.nv].copy()
         dq = data.qvel[: model.nv].copy()
-        ddq = data.qacc.copy()
 
         # quat_des needss be updated every step if changing orientation
         theta = data.xquat[pend_body_ID]
@@ -137,6 +154,9 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
         # quat_des = Rotation.from_matrix(R_des)
         # quat_des = quat_des.as_quat(scalar_first=True)
 
+        # quat_des is not being updated in the loop, it's a static value
+        # print("quat_des: ", quat_des)
+
         # quat_curr = np.zeros_like(quat_des)
         # quat_err = np.zeros_like(quat_des)
 
@@ -144,60 +164,87 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
 
         y_traj_des = np.array(
             [
-                0.134,
+                0.103,
                 -0.1,
-                0.93,
+                0.5,
             ]
         )
-        dy_des = np.zeros_like(y_traj_des)
-        ddy_des = np.zeros_like(y_traj_des)
-
-        # y_traj_des = np.array([0.49, 0.09, 0.6])
-
-        # dy_des = np.array([0.0, 0.0, 0.0])
-        # ddy_des = np.array([0.0, 0.0, 0.0])
+        dy_traj_des = np.zeros_like(y_traj_des)
+        ddy_traj_des = np.zeros_like(y_traj_des)
 
         R_flat = data.xmat[pend_body_ID]
         # change to quaternion
         mujoco.mju_mat2Quat(quat_curr, R_flat)
+
         if np.dot(quat_des, quat_curr) < 0:
             quat_curr = -quat_curr
 
+        # print("quat_curr: ", quat_curr)
+
         pos_curr = data.xpos[ee_body_ID]
         y_pos = pos_curr - y_traj_des
+
         # y_ori = quat_curr - quat_des
         mujoco.mju_mulQuat(quat_err, quat_des, quat_inverse(quat_curr))
         y_ori = -2 * quat_err[1:]
         # y_ori = y_ori[1:]
+
         y = np.hstack((y_pos, y_ori))
-        dy_des = np.hstack((dy_des, np.zeros(3)))
-        ddy_des = np.hstack((ddy_des, np.zeros(3)))
+        dy_des = np.hstack((dy_traj_des, np.zeros(3)))
+        ddy_des = np.hstack((ddy_traj_des, np.zeros(3)))
         # print(y)
+
         # get site jacobian and calculate J_task
-        mujoco.mj_jacBody(model, data, jacp, jacr, pend_body_ID)
-        jacr_t = jacr.copy()
-        mujoco.mj_jacBody(model, data, jacp, jacr, ee_body_ID)
-        J_task = np.vstack((jacp, jacr_t))
+        mujoco.mj_jacBody(model, data, jacp, jacr_rot, pend_body_ID)
+        # jacr_rot = jacr.copy()
+        mujoco.mj_jacBody(model, data, jacp_pos, jacr, ee_body_ID)
+        J_task = np.vstack((jacp_pos, jacr_rot))
+
         dy = J_task @ dq - dy_des  # y_dot is the angular velocity error (w_des is zero)
         ddy = -Kp @ y - Kd @ dy
         # ddy[:3] = Kp[:3, :3] @ y[:3] - Kd[:3, :3] @ dy[:3]
         # calculate dJ_task
+
         dJ_task = (J_task - J_task_prev) / dt  # finite difference
         if t == 0:
             dJ_task = np.zeros_like(J_task)
+
         J_task_prev = J_task.copy()  # for next step iter
+
         # --- Dynamics ---
         # Bring in the dynamics
         h_total = data.qfrc_bias.copy()  # includes joint damping
         mujoco.mj_fullM(model, M, data.qM)  # get mass matrix
+
         M_inv = np.linalg.inv(M)  # mass matrix inverse
-        h_total = h_total
+
         b = ddy + J_task @ M_inv @ h_total - dJ_task @ dq + ddy_des
+
+        rank_J_task = np.linalg.matrix_rank(J_task)
+        # print("rank_J_task")
+        # print(rank_J_task)
         A = J_task @ M_inv @ B
-        # regularize A@A^T if near singularity by checking SVD
+        rank_A = np.linalg.matrix_rank(A)
+
+        if rank_A < model.nu:
+            print("A")
+            print(A)
+            print(f"A rank {rank_A} is < {model.nu}!")
+
+        # regularize A@A^T
         A_T = np.transpose(A)
         G = A @ A_T
+
+        # rank_G = np.linalg.matrix_rank(G)
+        # print("rank_G")
+        # print(rank_G)
+
         G_damped = G + lambda_**2 * np.eye(y_size)
+
+        # rank_G_damped = np.linalg.matrix_rank(G_damped)
+        # print("rank_G_damped")
+        # print(rank_G_damped)
+
         G_inv = np.linalg.inv(G_damped)
         A_dagger = A_T @ G_inv  # right pseudo-inverse of A
         tau_task = A_dagger @ b
@@ -206,79 +253,15 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
         tau_total = tau_task  # + (N @ tau_pos)
         # tau_total = J_task.T @ ddy
         # # --- Apply ---
+        data.ctrl[:] = tau_total
 
-        # QP formulation
-        ## QP Formulation
-
-        k = ddy - dJ_task @ dq + ddy_des
-        dim_q = model.nv
-        dim_tau = model.nu
-        dim_x = dim_q + dim_tau  # 13 variables
-        P = np.zeros((dim_x, dim_x))
-        q_vec = np.zeros(dim_x)
-
-        P[:dim_q, :dim_q] = J_task.T @ J_task
-        P[dim_q:, dim_q:] = w_reg * np.eye(dim_tau)
-        q_vec[:dim_q] = -J_task.T @ k
-
-        A_eq = np.hstack([M, -B])
-        b_eq = -h_total  # RHS
-
-        # ddq_lim = 10
-        tau_lim = np.concatenate((150 * np.ones(3), 28 * np.ones(3)))
-
-        # qacc_limit_upper = 2 / TIMESTEP**2 * (qpos_lim - q - dq * TIMESTEP)
-        # qacc_limit_lower = 2 / TIMESTEP**2 * (-qpos_lim - q - dq * TIMESTEP)
-        # print(qacc_limit_upper)
-        # print(qacc_limit_lower)
-
-        ## Get safe acceleration bounds based on the invariance method
-        # predict next joint positions
-        q_next = q + dq * TIMESTEP
-
-        # predict available distance from the limits
-        d_upper = np.maximum(np.zeros(model.nv), qpos_lim - q_next)
-        d_lower = np.maximum(np.zeros(model.nv), q_next - -(qpos_lim))
-
-        qvel_safe_upper = np.sqrt(2 * beta * d_upper)
-        qvel_safe_lower = -np.sqrt(2 * beta * d_lower)
-
-        qvel_upper_bound = np.minimum(qvel_lim, qvel_safe_upper)
-        qvel_lower_bound = np.maximum(-qvel_lim, qvel_safe_lower)
-
-        qacc_upper_bound = (qvel_upper_bound - dq) / TIMESTEP
-        qacc_lower_bound = (qvel_lower_bound - dq) / TIMESTEP
-
-        # print(d_upper)
-        # input()
-
-        # qacc_lim = np.ones(model.nv) * np.inf
-
-        lower_bound = np.concatenate((qacc_lower_bound, -tau_lim))
-        upper_bound = np.concatenate((qacc_upper_bound, tau_lim))
-
-        x_sol = solve_qp(
-            P,
-            q_vec.flatten(),
-            None,
-            None,
-            A_eq,
-            b_eq.flatten(),
-            lb=lower_bound.flatten(),
-            ub=upper_bound.flatten(),
-            solver="osqp",
+        # get ee acc
+        ee_cacc = np.zeros(6)
+        mujoco.mj_objectAcceleration(
+            model, data, mujoco.mjtObj.mjOBJ_BODY, ee_body_ID, ee_cacc, 0
         )
-
-        # # --- Apply ---
-        if x_sol is not None:
-            # Extract Torques (Last 6 elements)
-            tau_cmd = x_sol[dim_q:]
-            data.ctrl[:] = tau_cmd
-        else:
-            print("QP Failed! Sending Zero Torque.")
-            data.ctrl[:] = 0
-
-        # data.ctrl[:] = tau_total
+        ee_cacc = ee_cacc[3:].copy()
+        ee_cacc = ee_cacc + model.opt.gravity[:]
 
         if step_count % 100 == 0:
             print("***---***")
@@ -292,13 +275,20 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
             print("pos_curr: ", pos_curr)
             print("pos_des: ", y_traj_des)
 
-            print("lower_bound: ", lower_bound)
-            print("upper_bound: ", upper_bound)
+            # print("lower_bound: ", lower_bound)
+            # print("upper_bound: ", upper_bound)
 
             print("y_norm: ", np.linalg.norm(y))
 
+            print("ee_acc: ", ee_cacc)
+
         # data.mocap_pos[0] = y_traj_des
-        t += dt
+
+        # Step the simulation
+        # input()
+        mujoco.mj_step(model, data)
+
+        # t += dt
         step_count += 1
         # Sync the viewer
         viewer.sync()
