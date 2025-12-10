@@ -105,7 +105,6 @@ TIMESTEP = model.opt.timestep
 
 step_count = 0
 
-# model.opt.gravity[:] = 0
 
 with mujoco.viewer.launch_passive(model, data) as viewer:
     # Set initial joint positions (home position)
@@ -135,12 +134,13 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
     viewer.cam.lookat[:] = [0, 0, 0.5]  # Point the camera is looking at [x, y, z]
 
     # Apply the changes
+    mujoco.mj_forward(model, data)
     viewer.sync()
 
     # Simulation loop
     while viewer.is_running():
         # Step the simulation
-        mujoco.mj_step(model, data)
+        mujoco.mj_forward(model, data)
 
         q = data.qpos[: model.nv].copy()
         dq = data.qvel[: model.nv].copy()
@@ -332,6 +332,8 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
             print("y_norm: ", np.linalg.norm(y))
 
         # data.mocap_pos[0] = y_traj_des
+        mujoco.mj_step(model, data)
+        # input()
         t += dt
         step_count += 1
         # Sync the viewer

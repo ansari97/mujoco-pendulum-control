@@ -27,10 +27,10 @@
       <default class="visual">
         <geom type="mesh" contype="0" conaffinity="0" group="2" />
       </default>
-      <default class="collision" contype="1" conaffinity="7" margin="0.02">
-        <geom type="capsule" group="3" />
+      <default class="collision" >
+        <geom type="capsule" group="3" contype="1" conaffinity="7" margin="0.02" gap="0.02"/>
         <default class="eef_collision">
-          <geom type="cylinder" />
+          <geom type="cylinder" contype="1" conaffinity="7" margin="0.02"/>
         </default>
       </default>
       <site size="0.001" rgba="0.5 0.5 0.5 0.3" group="4" />
@@ -95,7 +95,7 @@
     <geom name="ground"
       type="plane"
       size="20 20 0.1"
-      material="grid" rgba="1 1 1 1" contype="4" conaffinity="3" margin="0.02"/>
+      material="grid" rgba="1 1 1 1" contype="4" conaffinity="3" margin="0.02" gap="0.02"/>
 
     <!-- <light name="spotlight" mode="targetbodycom" target="wrist_2_link" pos="0 -1 2"/> -->
     <!-- <body name="base" quat="0 0 0 -1" childclass="ur5e"> -->
@@ -141,8 +141,8 @@
                 <geom mesh="wrist2_0" material="black" class="visual" />
                 <geom mesh="wrist2_1" material="urblue" class="visual" />
                 <geom mesh="wrist2_2" material="jointgray" class="visual" />
-                <geom class="collision" size="0.04 0.06" pos="0 0 0.04" />
-                <geom class="collision" pos="0 0.02 0.1" quat="1 1 0 0" size="0.04 0.04" />
+                <geom class="collision" size="0.04 0.06" pos="0 0 0.04" rgba="1 1 0 0.5"/>
+                <!-- <geom class="collision" pos="0 0.02 0.1" quat="1 1 0 0" size="0.04 0.04" rgba="1 0 0 1"/> -->
                 <body name="wrist_3_link" pos="0 0 0.1">
                   <inertial mass="0.1889" pos="0 0.0771683 0" quat="1 0 0 1"
                     diaginertia="0.000132134 9.90863e-05 9.90863e-05" />
@@ -151,7 +151,7 @@
                   <geom material="linkgray" mesh="wrist3" class="visual" />
                   <geom
                     name="eef_geom" class="eef_collision" pos="0 0.08 0" quat="1 1 0 0"
-                    size="0.04 0.02" />
+                    size="0.04 0.02" rgba="0 0 0 0.25"/>
                   <site name="UR_TCP" pos="0 0.1 0" quat="1 0 0 0" />
                   <site
                     name="attachment_site" pos="0 0.1 0" quat="-1 1 0 0" />
@@ -159,16 +159,16 @@
                     <!-- body frame rotated about wrist -x axis by 90deg-->
                     <!-- <inertial mass="0.500" pos="0 0 0.25"
                       diaginertia="0.010419 0.010419 0.000025" /> -->
-                    <geom
+                    <geom name="pend_cyl"
                       type="cylinder"
                       size="0.01 0.25"
                       mass="0.150"
-                      pos="0 0 0.25" rgba="1 1 0 1" contype="2" conaffinity="5" margin="0.02"/>
-                    <geom 
+                      pos="0 0 0.25" rgba="1 1 0 1" contype="2" conaffinity="5" margin="0.02" gap="0.02"/>
+                    <geom name="pend_sph"
                       type="sphere"
                       size="0.03"
                       mass="0.150"
-                      pos="0 0 0.5" rgba="1 0 0 1" contype="2" conaffinity="5" margin="0.02"/>>
+                      pos="0 0 0.5" rgba="1 0 0 1" contype="2" conaffinity="5" margin="0.02" gap="0.02"/>>
                     <site name="pend_com_site" pos="0 0 0.25" />
                     <!--  cylinder length in the size attribute is the half-length, pos is com from the body frame-->
                     <joint
@@ -186,6 +186,18 @@
       <geom type="sphere" size="0.02" rgba="1 0 1 1" pos="0 0 0 "/>
     </body> -->
   </worldbody>
+
+  <contact>
+      <pair geom1="eef_geom" geom2="pend_cyl"/>
+      <exclude body1="world" body2="shoulder_link"/>
+      <exclude body1="shoulder_link" body2="upper_arm_link"/>
+      <exclude body1="upper_arm_link" body2="forearm_link"/>
+      <exclude body1="forearm_link" body2="wrist_1_link"/>
+      <exclude body1="wrist_1_link" body2="wrist_2_link"/>
+      <exclude body1="wrist_2_link" body2="wrist_3_link"/>
+
+      <!-- <exclude body1="base_link" body2="shoulder_link"/> -->
+  </contact>
 
 
   <actuator>

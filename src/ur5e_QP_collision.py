@@ -23,7 +23,7 @@ def getEulerFromQuat(quat):
 
 # Load the UR5e model
 file_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-XML_PATH = file_path + "/assets/ur5e/ur5e_pend_bob.xml"
+XML_PATH = file_path + "/assets/ur5e/ur5e_pend_bob_collision.xml"
 model = mujoco.MjModel.from_xml_path(XML_PATH)
 data = mujoco.MjData(model)
 
@@ -63,6 +63,10 @@ jacp = np.zeros((3, model.nv))
 jacr = np.zeros((3, model.nv))
 y = np.zeros(y_size)
 ddy = np.zeros_like(y)
+
+# For contacts
+jacp1 = np.zeros_like(jacp)
+jacp2 = np.zeros_like(jacp)
 
 # Quaternion utilities
 theta = np.deg2rad(0)
@@ -105,11 +109,14 @@ TIMESTEP = model.opt.timestep
 
 step_count = 0
 
-# model.opt.gravity[:] = 0
+# For contacts
+kp_con = 1000
+kd_con = 10
+d_safe = 2e-2  # 2cm; should b less than or equal to margin in the xml file
 
 with mujoco.viewer.launch_passive(model, data) as viewer:
     # Set initial joint positions (home position)
-    data.qpos = [-np.pi, -np.pi / 2, 0, -np.pi, -np.pi / 2, 0, 0.20]
+    data.qpos = [-np.pi, -np.pi / 2, 0, -np.pi, -np.pi / 2, 0, 0.15]
     data.qvel = np.zeros(model.nv)
     # data.mocap_pos[0] = [1.0, 0.0, 1.0]  # Initial position of the mocap sphere
 
@@ -128,19 +135,24 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
 
     step_count = 0
 
-    # --- SET CAMERA ANGLE ONCE ---
+    # Set camera angle
     viewer.cam.azimuth = 90  # Azimuth angle (degrees)
     viewer.cam.elevation = -45  # Elevation angle (degrees)
     viewer.cam.distance = 5.0  # Distance from the lookat point (meters)
     viewer.cam.lookat[:] = [0, 0, 0.5]  # Point the camera is looking at [x, y, z]
 
+    # visualize contact force
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = True
+
+    mujoco.mj_forward(model, data)
     # Apply the changes
     viewer.sync()
 
     # Simulation loop
     while viewer.is_running():
         # Step the simulation
-        mujoco.mj_step(model, data)
+        mujoco.mj_forward(model, data)
+        mujoco.mj_collision(model, data)
 
         q = data.qpos[: model.nv].copy()
         dq = data.qvel[: model.nv].copy()
@@ -166,9 +178,9 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
 
         y_traj_des = np.array(
             [
-                0.103,
+                0.0,
                 -0.1,
-                0.5,
+                0.2,
             ]
         )
         dy_des = np.zeros_like(y_traj_des)
@@ -284,15 +296,77 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
         # input()
 
         # qacc_lim = np.ones(model.nv) * np.inf
+        # qacc_upper_bound = np.ones(model.nv) * np.inf
+        # qacc_lower_bound = -np.ones(model.nv) * np.inf
 
         lower_bound = np.concatenate((qacc_lower_bound, -tau_lim))
         upper_bound = np.concatenate((qacc_upper_bound, tau_lim))
 
+        ## Collision detection
+        # Reset A_con and b_con so that this constraint is inactive when no contact
+        A_con = None
+        b_con = None
+
+        if data.ncon > 0:
+            con_total = data.ncon
+            A_con = np.zeros((con_total, dim_x))
+            b_con = np.zeros(con_total)
+            print("con_total")
+            print(con_total)
+            for n in range(con_total):
+                # get contact geometry ids
+                k = data.contact[n]
+                id1 = k.geom1
+                body_id1 = model.geom_bodyid[id1]
+                body_name1 = mujoco.mj_id2name(
+                    model, mujoco.mjtObj.mjOBJ_BODY, body_id1
+                )
+
+                id2 = k.geom2
+                body_id2 = model.geom_bodyid[id2]
+                body_name2 = mujoco.mj_id2name(
+                    model, mujoco.mjtObj.mjOBJ_BODY, body_id2
+                )
+
+                print(f"contact {n} at time {t}")
+                print(body_name1)
+                print(body_name2)
+
+                # get contact normal vector, position and distance between points
+                normal = k.frame[:3]
+                p = k.pos
+                d = k.dist
+
+                print("d:", d)
+
+                # get velocity jacobians for each body
+                mujoco.mj_jac(model, data, jacp1, None, p, body_id1)
+                mujoco.mj_jac(model, data, jacp2, None, p, body_id2)
+
+                J_rel = jacp2 - jacp1
+
+                # Projected jacobian
+                J_proj = np.dot(normal, J_rel)
+
+                # sepearation velocity
+                dd = J_proj @ dq
+
+                A_con[n, : model.nv] = -J_proj
+                b_con[n] = kp_con * (d - d_safe) + kd_con * dd
+
+        print("contact inequalities")
+        print(A_con)
+        print(b_con)
+
+        # Uncomment when collision avoidance not required
+        # A_con = None
+        # b_con = None
+
         x_sol = solve_qp(
             P,
             q_vec.flatten(),
-            None,
-            None,
+            A_con,
+            b_con,
             A_eq,
             b_eq.flatten(),
             lb=lower_bound.flatten(),
@@ -309,7 +383,7 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
             print("QP Failed! Sending Zero Torque.")
             data.ctrl[:] = 0
 
-        # data.ctrl[:] = tau_total
+        # data.ctrl[:] = 0
 
         if step_count % 100 == 0:
             print("***---***")
@@ -329,6 +403,9 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
             print("y_norm: ", np.linalg.norm(y))
 
         # data.mocap_pos[0] = y_traj_des
+
+        mujoco.mj_step(model, data)
+        # input()
         t += dt
         step_count += 1
         # Sync the viewer

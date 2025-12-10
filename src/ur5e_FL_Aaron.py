@@ -93,7 +93,7 @@ model.opt.disableflags |= mujoco.mjtDisableBit.mjDSBL_CONTACT
 
 with mujoco.viewer.launch_passive(model, data) as viewer:
     # Set initial joint positions (home position)
-    data.qpos = [-np.pi, -np.pi / 2, 0, -np.pi, -np.pi / 2, 0, 0.55]
+    data.qpos = [-np.pi, -np.pi / 2, 0, -np.pi, -np.pi / 2, 0, 0.20]
     data.qvel = np.zeros(model.nv)
     # data.mocap_pos[0] = [1.0, 0.0, 1.0]  # Initial position of the mocap sphere
 
@@ -119,6 +119,7 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
     viewer.cam.lookat[:] = [0, 0, 0.5]  # Point the camera is looking at [x, y, z]
 
     # Apply the changes
+    mujoco.mj_forward(model, data)
     viewer.sync()
 
     # 1. Check Total Mass
@@ -287,8 +288,8 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
         # Step the simulation
         # input()
         mujoco.mj_step(model, data)
-
-        # t += dt
+        # input()
+        t += dt
         step_count += 1
         # Sync the viewer
         viewer.sync()
